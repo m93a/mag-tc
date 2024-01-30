@@ -1,4 +1,4 @@
-use std::{any::Any, ptr::eq, sync::Arc};
+use std::{any::Any, ops::Shl, ptr::eq, sync::Arc};
 
 pub trait IntoAny {
     fn into_any(&self) -> Box<&dyn Any>;
@@ -10,7 +10,7 @@ impl<T: Sized + 'static> IntoAny for T {
 }
 
 pub trait Type: IntoAny {
-    fn is_assignable_to(&self, other: Box<&dyn Type>) -> bool;
+    fn is_assignable_to(&self, other: &dyn Type) -> bool;
 
     fn is_supertype_of(&self, _: Box<&dyn Type>) -> Option<bool> {
         None
@@ -45,6 +45,30 @@ impl BoxedTypeUtils for Box<&dyn Type> {
         (*self.as_ref()).into_any().downcast_ref()
     }
 }
+impl BoxedTypeUtils for &dyn Type {
+    fn cast<T: 'static>(&self) -> Option<&T> {
+        (*self).into_any().downcast_ref()
+    }
+}
+
+impl Shl for &dyn Type {
+    type Output = bool;
+    fn shl(self, rhs: Self) -> bool {
+        rhs.is_assignable_to(self)
+    }
+}
+impl Shl for Box<&dyn Type> {
+    type Output = bool;
+    fn shl(self, rhs: Self) -> bool {
+        rhs.is_assignable_to(*self.as_ref())
+    }
+}
+impl Shl for &Box<&dyn Type> {
+    type Output = bool;
+    fn shl(self, rhs: Self) -> bool {
+        rhs.is_assignable_to(*self.as_ref())
+    }
+}
 
 #[derive(PartialEq)]
 pub enum Primitive {
@@ -54,7 +78,7 @@ pub enum Primitive {
     UInt(usize),
 }
 impl Type for Primitive {
-    fn is_assignable_to(&self, other: Box<&dyn Type>) -> bool {
+    fn is_assignable_to(&self, other: &dyn Type) -> bool {
         if let Some(x) = other.is_supertype_of(self.boxed()) {
             return x;
         }
@@ -80,16 +104,12 @@ impl Trait {
     }
 }
 impl Type for Trait {
-    fn is_assignable_to(&self, other: Box<&dyn Type>) -> bool {
+    fn is_assignable_to(&self, other: &dyn Type) -> bool {
         if let Some(x) = other.is_supertype_of(self.boxed()) {
             return x;
         }
         if let Some(x) = other.cast::<Trait>() {
-            eq(self, x)
-                || self
-                    .supertraits
-                    .iter()
-                    .any(|s| s.is_assignable_to(x.boxed()))
+            eq(self, x) || self.supertraits.iter().any(|s| s.is_assignable_to(x))
         } else {
             false
         }
@@ -122,14 +142,14 @@ impl Function {
 }
 
 impl Type for Function {
-    fn is_assignable_to(&self, other: Box<&dyn Type>) -> bool {
+    fn is_assignable_to(&self, other: &dyn Type) -> bool {
         if let Some(x) = other.is_supertype_of(self.boxed()) {
             println!("supertype");
             return x;
         }
         if let Some(x) = other.cast::<Function>() {
             if self.args.len() != x.args.len()
-                || !self.return_type.is_assignable_to(x.return_type.boxed())
+                || !self.return_type.is_assignable_to(x.return_type.as_ref())
             {
                 return false;
             }
@@ -138,7 +158,7 @@ impl Type for Function {
                 // args are contravariant
                 if !x.args[i]
                     .arg_type
-                    .is_assignable_to(self.args[i].arg_type.boxed())
+                    .is_assignable_to(self.args[i].arg_type.as_ref())
                 {
                     return false;
                 }
@@ -152,23 +172,23 @@ impl Type for Function {
 
 #[test]
 fn primitive_type() {
-    let bool_a = Primitive::Boolean;
-    let bool_b = Primitive::Boolean;
-    let int32a = Primitive::Int(32);
-    let int32b = Primitive::Int(32);
-    let int64 = Primitive::Int(64);
+    let bool_a = Primitive::Boolean.boxed();
+    let bool_b = Primitive::Boolean.boxed();
+    let int32a = Primitive::Int(32).boxed();
+    let int32b = Primitive::Int(32).boxed();
+    let int64 = Primitive::Int(64).boxed();
 
-    assert!(bool_a.is_assignable_to(bool_a.boxed()));
-    assert!(bool_a.is_assignable_to(bool_b.boxed()));
-    assert!(bool_b.is_assignable_to(bool_a.boxed()));
+    assert!(&bool_a << &bool_a);
+    assert!(&bool_a << &bool_b);
+    assert!(&bool_b << &bool_a);
 
-    assert!(int32a.is_assignable_to(int32a.boxed()));
-    assert!(int32a.is_assignable_to(int32b.boxed()));
-    assert!(int32b.is_assignable_to(int32a.boxed()));
+    assert!(&int32a << &int32a);
+    assert!(&int32a << &int32b);
+    assert!(&int32b << &int32a);
 
-    assert!(!bool_a.is_assignable_to(int32a.boxed()));
-    assert!(!int32a.is_assignable_to(bool_a.boxed()));
-    assert!(!int32a.is_assignable_to(int64.boxed()));
+    assert!(!(&bool_a << &int32a));
+    assert!(!(&int32a << &bool_a));
+    assert!(!(&int32a << &int64));
 }
 
 #[test]
@@ -182,21 +202,21 @@ fn trait_type() {
     let cat = Trait::new_arc(vec![&animal, &meower]);
 
     for t in [&life, &plant, &animal, &dog, &meower, &cat] {
-        assert!(t.is_assignable_to(t.boxed()));
+        assert!(t.is_assignable_to(t.as_ref()));
     }
 
-    assert!(plant.is_assignable_to(life.boxed()));
-    assert!(!life.is_assignable_to(plant.boxed()));
+    assert!(plant.is_assignable_to(life.as_ref()));
+    assert!(!life.is_assignable_to(plant.as_ref()));
 
-    assert!(animal.is_assignable_to(life.boxed()));
-    assert!(dog.is_assignable_to(life.boxed()));
-    assert!(dog.is_assignable_to(animal.boxed()));
-    assert!(!dog.is_assignable_to(plant.boxed()));
+    assert!(animal.is_assignable_to(life.as_ref()));
+    assert!(dog.is_assignable_to(life.as_ref()));
+    assert!(dog.is_assignable_to(animal.as_ref()));
+    assert!(!dog.is_assignable_to(plant.as_ref()));
 
-    assert!(cat.is_assignable_to(life.boxed()));
-    assert!(cat.is_assignable_to(animal.boxed()));
-    assert!(cat.is_assignable_to(meower.boxed()));
-    assert!(!cat.is_assignable_to(dog.boxed()));
+    assert!(cat.is_assignable_to(life.as_ref()));
+    assert!(cat.is_assignable_to(animal.as_ref()));
+    assert!(cat.is_assignable_to(meower.as_ref()));
+    assert!(!cat.is_assignable_to(dog.as_ref()));
 }
 
 #[test]
@@ -206,22 +226,22 @@ fn function_type() {
 
     let greet_animal = Function::new(vec![("a", animal.clone())], Primitive::Void.arc());
     let greet_cat = Function::new(vec![("c", cat.clone())], Primitive::Void.arc());
-    assert!(greet_animal.is_assignable_to(greet_animal.boxed()));
-    assert!(greet_animal.is_assignable_to(greet_cat.boxed()));
-    assert!(greet_cat.is_assignable_to(greet_cat.boxed()));
-    assert!(!greet_cat.is_assignable_to(greet_animal.boxed()));
+    assert!(greet_animal.is_assignable_to(&greet_animal));
+    assert!(greet_animal.is_assignable_to(&greet_cat));
+    assert!(greet_cat.is_assignable_to(&greet_cat));
+    assert!(!greet_cat.is_assignable_to(&greet_animal));
 
     let get_animal = Function::new(vec![], animal.clone());
     let get_cat = Function::new(vec![], cat.clone());
-    assert!(get_cat.is_assignable_to(get_cat.boxed()));
-    assert!(get_cat.is_assignable_to(get_animal.boxed()));
-    assert!(get_animal.is_assignable_to(get_animal.boxed()));
-    assert!(!get_animal.is_assignable_to(get_cat.boxed()));
+    assert!(get_cat.is_assignable_to(&get_cat));
+    assert!(get_cat.is_assignable_to(&get_animal));
+    assert!(get_animal.is_assignable_to(&get_animal));
+    assert!(!get_animal.is_assignable_to(&get_cat));
 
     let trade_animal = Function::new(vec![("a", animal.clone())], animal.clone());
     let trade_cat = Function::new(vec![("c", cat.clone())], cat.clone());
-    assert!(trade_animal.is_assignable_to(trade_animal.boxed()));
-    assert!(trade_cat.is_assignable_to(trade_cat.boxed()));
-    assert!(!trade_animal.is_assignable_to(trade_cat.boxed()));
-    assert!(!trade_cat.is_assignable_to(trade_animal.boxed()));
+    assert!(trade_animal.is_assignable_to(&trade_animal));
+    assert!(trade_cat.is_assignable_to(&trade_cat));
+    assert!(!trade_animal.is_assignable_to(&trade_cat));
+    assert!(!trade_cat.is_assignable_to(&trade_animal));
 }
