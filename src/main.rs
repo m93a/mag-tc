@@ -1,4 +1,4 @@
-use crate::types::{Primitive, Type};
+use crate::types::{BoxableType, Primitive, Type};
 
 #[allow(dead_code)]
 mod types;
@@ -8,6 +8,6 @@ fn main() {
     let boolean_instance = Primitive::Boolean;
 
     // Example usage
-    let is_subtype = boolean_instance.is_subtype_of(boolean_instance.box_());
+    let is_subtype = boolean_instance.is_assignable_to(boolean_instance.boxed());
     println!("Is subtype: {}", is_subtype); // Output should be true
 }
